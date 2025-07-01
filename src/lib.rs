@@ -7,16 +7,16 @@ use std::marker;
 use std::thread;
 
 use fastrace::prelude::SpanContext;
-use tracing_core::Event;
-use tracing_core::Subscriber;
 use tracing_core::field;
 use tracing_core::span::Attributes;
 use tracing_core::span::Id;
 use tracing_core::span::Record;
 use tracing_core::span::{self};
-use tracing_subscriber::Layer;
+use tracing_core::Event;
+use tracing_core::Subscriber;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::Layer;
 
 const FIELD_EXCEPTION_MESSAGE: &str = "exception.message";
 const FIELD_EXCEPTION_STACKTRACE: &str = "exception.stacktrace";
@@ -265,7 +265,8 @@ impl field::Visit for SpanAttributeVisitor<'_> {
 }
 
 impl<S> FastraceCompatLayer<S>
-where S: Subscriber + for<'span> LookupSpan<'span>
+where
+    S: Subscriber + for<'span> LookupSpan<'span>,
 {
     /// Creates a new [`FastraceCompatLayer`] with default settings.
     pub fn new() -> Self {
@@ -357,7 +358,8 @@ where S: Subscriber + for<'span> LookupSpan<'span>
 }
 
 impl<S> Default for FastraceCompatLayer<S>
-where S: Subscriber + for<'span> LookupSpan<'span>
+where
+    S: Subscriber + for<'span> LookupSpan<'span>,
 {
     fn default() -> Self {
         Self::new()
@@ -380,46 +382,45 @@ fn thread_id_integer(id: thread::ThreadId) -> u64 {
 }
 
 impl<S> Layer<S> for FastraceCompatLayer<S>
-where S: Subscriber + for<'span> LookupSpan<'span>
+where
+    S: Subscriber + for<'span> LookupSpan<'span>,
 {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
         let span = ctx.span(id).expect("Span not found, this is a bug");
 
         let mut fastrace_span = self.new_fastrace_span(attrs, &ctx);
 
+        let mut props = Vec::with_capacity(8);
         if self.location {
             let meta = attrs.metadata();
 
             if let Some(filename) = meta.file() {
-                fastrace_span =
-                    fastrace_span.with_property(|| ("code.filepath", filename.to_string()));
+                props.push(("code.filepath", filename.to_string()));
             }
 
             if let Some(module) = meta.module_path() {
-                fastrace_span =
-                    fastrace_span.with_property(|| ("code.namespace", module.to_string()));
+                props.push(("code.namespace", module.to_string()));
             }
 
             if let Some(line) = meta.line() {
-                fastrace_span = fastrace_span.with_property(|| ("code.lineno", line.to_string()));
+                props.push(("code.lineno", line.to_string()));
             }
         }
 
         if self.with_threads {
             THREAD_ID.with(|id| {
-                take_mut::take(&mut fastrace_span, |span| {
-                    span.with_property(|| ("thread.id", id.to_string()))
-                });
+                props.push(("thread.id", id.to_string()));
             });
             if let Some(name) = std::thread::current().name() {
-                fastrace_span = fastrace_span.with_property(|| ("thread.name", name.to_string()));
+                props.push(("thread.name", name.to_string()));
             }
         }
 
         if self.with_level {
-            fastrace_span =
-                fastrace_span.with_property(|| ("level", attrs.metadata().level().as_str()));
+            props.push(("level", attrs.metadata().level().to_string()));
         }
+
+        fastrace_span = fastrace_span.with_properties(|| props);
 
         attrs.record(&mut SpanAttributeVisitor {
             fastrace_span: &mut fastrace_span,
